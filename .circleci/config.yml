@@ -1,0 +1,97 @@
+# PHP CircleCI 2.0 configuration file
+#
+# Check https://circleci.com/docs/2.0/language-php/ for more details
+#
+version: 2
+jobs:
+  build:
+    docker:
+      # Specify the version you desire here
+      - image: debian:stretch-slim as cryptopro-generic
+
+      # Specify service dependencies here if necessary
+      # CircleCI maintains a library of pre-built images
+      # documented at https://circleci.com/docs/2.0/circleci-images/
+      # Using the RAM variation mitigates I/O contention
+      # for database intensive operations.
+      # - image: circleci/mysql:5.7-ram
+      #
+      # - image: redis:2.8.19
+
+    steps:
+      - checkout
+
+      - run: sudo apt update # PHP CircleCI 2.0 Configuration File# PHP CircleCI 2.0 Configuration File sudo apt install zlib1g-dev libsqlite3-dev
+      - run: sudo docker-php-ext-install zip
+      - run: cd /tmp/src && \
+          tar -xf linux-amd64_deb.tgz && \
+          linux-amd64_deb/install.sh && \          
+          cd /bin && \
+          ln -s /opt/cprocsp/bin/amd64/certmgr && \
+          ln -s /opt/cprocsp/bin/amd64/cpverify && \
+          ln -s /opt/cprocsp/bin/amd64/cryptcp && \
+          ln -s /opt/cprocsp/bin/amd64/csptest && \
+          ln -s /opt/cprocsp/bin/amd64/csptestf && \
+          ln -s /opt/cprocsp/bin/amd64/der2xer && \
+          ln -s /opt/cprocsp/bin/amd64/inittst && \
+          ln -s /opt/cprocsp/bin/amd64/wipefile && \
+          ln -s /opt/cprocsp/sbin/amd64/cpconfig && \
+          rm -rf /tmp/src
+
+      - run: apt-get update && \
+          apt-get install -y --no-install-recommends expect alien php7.0-cli php7.0-dev libboost-dev unzip g++ curl && \
+          cd /tmp/src && \
+          tar -xf cades_linux_amd64.tar.gz && \
+          alien -kci lsb-cprocsp-devel-4.0.9921-5.noarch.rpm && \
+          alien -kci cprocsp-pki-2.0.0-amd64-phpcades.rpm && \
+          alien -kci cprocsp-pki-2.0.0-amd64-cades.rpm && \    
+          PHP_BUILD=`php -i | grep 'PHP Extension => ' | awk '{print $4}'` && \
+          EXT_DIR=`php -i | grep 'extension_dir => ' | awk '{print $3}'` && \
+          sed -i "s#PHPDIR=/php#PHPDIR=/usr/include/php/$PHP_BUILD#g" /opt/cprocsp/src/phpcades/Makefile.unix && \    
+          ln -s /opt/cprocsp/lib/amd64/libcppcades.so.2 /opt/cprocsp/lib/amd64/libcppcades.so && \    
+          cd /opt/cprocsp/src/phpcades && \    
+          unzip /tmp/src/php7_support.patch.zip && \
+          patch < php7_support.patch && \   
+          eval `/opt/cprocsp/src/doxygen/CSP/../setenv.sh --64`; make -f Makefile.unix && \    
+          mv libphpcades.so "$EXT_DIR" && \    
+          echo "extension=libphpcades.so" > /etc/php/7.0/cli/conf.d/20-libphpcades.ini && \    
+          php -r "var_dump(class_exists('CPStore'));" | grep -q 'bool(true)' && \    
+          cd / && \
+          apt-get purge -y php7.0-dev cprocsp-pki-phpcades lsb-cprocsp-devel g++ && \
+          apt-get autoremove -y && \
+          rm -rf /opt/cprocsp/src/phpcades && \
+          rm -rf /tmp/src && \
+          rm -rf /var/lib/apt/lists/
+
+      # Download and cache dependencies
+      - restore_cache:
+          keys:
+            # "composer.lock" can be used if it is committed to the repo
+            - v1-dependencies-{{ checksum "composer.json" }}
+            # fallback to using the latest cache if no exact match is found
+            - v1-dependencies-
+
+      - run: composer install -n --prefer-dist
+
+      - save_cache:
+          key: v1-dependencies-{{ checksum "composer.json" }}
+          paths:
+            - ./vendor
+      - restore_cache:
+          keys:
+            - node-v1-{{ checksum "package.json" }}
+            - node-v1-
+      - run: yarn install
+      - save_cache:
+          key: node-v1-{{ checksum "package.json" }}
+          paths:
+            - node_modules
+
+      # prepare the database
+      - run: touch storage/testing.sqlite
+      - run: php artisan migrate --env=testing --database=sqlite_testing --force
+
+      # run tests with phpunit or codecept
+      #- run: ./vendor/bin/phpunit
+      - run: ./vendor/bin/codecept build
+      - run: ./vendor/bin/codecept run
